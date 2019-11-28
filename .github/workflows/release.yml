@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        command: [repeat-forever]
+        os: [linux, darwin]
+        arch: [amd64]
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v1
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+    - name: Metadata
+      id: metadata
+      run: |
+        VERSION="${GITHUB_REF/refs\/tags\/v/}"
+        ARTIFACT_NAME="${{ matrix.command }}_v${VERSION}_${{ matrix.os }}_${{ matrix.arch }}.zip"
+        echo ::set-output name=artifact_name::${ARTIFACT_NAME}
+    - name: Build
+      id: build
+      run: |
+        COMMAND="${{ matrix.command }}"
+        GOOS="${{ matrix.os }}"
+        GOARCH="${{ matrix.arch }}"
+        ARTIFACT_NAME="${{ steps.metadata.outputs.artifact_name }}"
+        GOOS="$GOOS" GOARCH="$GOARCH" go build -o "${COMMAND}" "cmd/${COMMAND}/"*.go
+        zip "${ARTIFACT_NAME}" "${COMMAND}"
+    - name: Upload zip
+      uses: actions/upload-artifact@v1
+      with:
+        path: ${{ steps.metadata.outputs.artifact_name }}
+        name: ${{ steps.metadata.outputs.artifact_name }}
+
+  create_release:
+    name: Create release
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Metadata
+      id: metadata
+      run: |
+        VERSION=${GITHUB_REF/refs\/tags\/v/}
+        echo "::set-output name=version::${VERSION}"
+    - name: Create release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Version ${{ steps.metadata.outputs.version }}
+        draft: false
+        prerelease: false
+    - name: Create artifact
+      run: echo "${{ steps.create_release.outputs.upload_url }}" >release_upload_url
+    - name: Upload artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: release_upload_url
+        path: release_upload_url
+
+  upload_release_asset:
+    name: Upload release asset
+    needs:
+    - create_release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        command: [repeat-forever]
+        os: [linux, darwin]
+        arch: [amd64]
+    steps:
+    - name: Metadata
+      id: metadata
+      run: |
+        VERSION="${GITHUB_REF/refs\/tags\/v/}"
+        ARTIFACT_NAME="${{ matrix.command }}_v${VERSION}_${{ matrix.os }}_${{ matrix.arch }}.zip"
+        echo "::set-output name=artifact_name::${ARTIFACT_NAME}"
+    - name: Fetch release upload URL
+      uses: actions/download-artifact@v1
+      with:
+        name: release_upload_url
+        path: .
+    - name: Load release upload URL
+      id: release
+      run: echo "::set-output name=upload_url::$(cat release_upload_url)"
+    - name: Download artifact
+      uses: actions/download-artifact@v1
+      with:
+        name: ${{ steps.metadata.outputs.artifact_name }}
+        path: .
+    - name: Upload release asset
+      uses: actions/upload-release-asset@v1.0.1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.release.outputs.upload_url }}
+        asset_path: ${{ steps.metadata.outputs.artifact_name }}
+        asset_name: ${{ steps.metadata.outputs.artifact_name }}
+        asset_content_type: application/zip
